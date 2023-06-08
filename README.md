@@ -1,4 +1,4 @@
-🎰🎲 LeveredVault || 🏗 Scaffold-Eth 2
+## 🎰🎲 LeveredVault || 🏗 Scaffold-Eth 2
 
 ## Overview
 
