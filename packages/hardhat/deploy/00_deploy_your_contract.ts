@@ -25,11 +25,20 @@ const deployYourContract: DeployFunction = async function (hre: HardhatRuntimeEn
   const aaveRewardsAddress = "0x67D1846E97B6541bA730f0C24899B0Ba3Be0D087";
   const leverage = true;
   const borrowPercentage = 25;
+  const maticUsdPriceFeed = "0xd0D5e3DB44DE05E9F294BB0a3bEEaF030DE24Ada";
 
   await deploy("LeveredVault", {
     from: deployer,
     // Contract constructor arguments
-    args: [wmaticAddress, deployer, aaveLendingPoolAddress, aaveRewardsAddress, leverage, borrowPercentage],
+    args: [
+      wmaticAddress,
+      deployer,
+      aaveLendingPoolAddress,
+      aaveRewardsAddress,
+      leverage,
+      borrowPercentage,
+      maticUsdPriceFeed,
+    ],
     log: true,
     // autoMine: can be passed to the deploy function to make the deployment process faster on local networks by
     // automatically mining the contract deployment transaction. There is no effect on live networks.

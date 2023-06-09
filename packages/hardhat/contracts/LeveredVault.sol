@@ -13,6 +13,7 @@ import "./Interfaces/aave/IRewardsController.sol";
 import "./Interfaces/IWMATIC.sol";
 import  { IERC20 } from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
 import {console} from "../lib/forge-std/src/console.sol";
+import  { AggregatorV3Interface } from '@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol';
 
 /**
  * @author @solidoracle
@@ -43,14 +44,21 @@ contract LeveredVault is ERC4626, Owned, ReentrancyGuard {
 
     bool public leverageStakingYieldToggle;
     uint8 public borrowPercentage;
+    AggregatorV3Interface immutable priceFeedMatic;
 
     // https://docs.aave.com/developers/deployed-contracts/v3-testnet-addresses
     address public immutable aave; 
     address public immutable aaveRewards;
 
-    constructor(ERC20 _UNDERLYING, address _owner, address _aave, address _aaveRewards, 
+    constructor(
+        ERC20 _UNDERLYING, 
+        address _owner, 
+        address _aave, 
+        address _aaveRewards, 
         bool _leverageStakingYieldToggle,
-        uint8 _borrowPercentage)
+        uint8 _borrowPercentage,
+        address _priceFeedMatic
+    )
         ERC4626(_UNDERLYING, "LeveredVault", "LVT")
         Owned(_owner)
     {
@@ -58,6 +66,7 @@ contract LeveredVault is ERC4626, Owned, ReentrancyGuard {
         aaveRewards = _aaveRewards;
         leverageStakingYieldToggle = _leverageStakingYieldToggle;
         borrowPercentage = _borrowPercentage;
+        priceFeedMatic = AggregatorV3Interface(_priceFeedMatic);
         // implicitly inherited from ERC20, which is passed as an argument to the ERC4626 constructor. 
         BASE_UNIT = 10**decimals;
         UNDERLYING = _UNDERLYING;
@@ -77,7 +86,86 @@ contract LeveredVault is ERC4626, Owned, ReentrancyGuard {
         IPool(aave).supply(address(asset), assets, address(this), 0);
         // Increase totalHoldings to account for the deposit.
         totalHoldings += assets;
+
+        console.logString('totalHoldings in contract'); 
+        console.logUint(totalHoldings);
+
+        console.logString('assets');
+        console.logUint(assets);
+
+        // Leverage 
+        if (leverageStakingYieldToggle) {
+        (uint256 _supplied, uint256 _borrowed, , , , ) = getAaveUserAccountData();
+        console.logString('_supplied');
+        console.logUint(_supplied); // in chainlink decimals
+        uint256 _toBeBorrowedUSD = (_supplied * borrowPercentage) / 100;
+        console.logString('_toBeBorrowedUSD one'); 
+        console.logUint(_toBeBorrowedUSD); 
+
+        if (_toBeBorrowedUSD > _borrowed) {
+            _toBeBorrowedUSD -= _borrowed;
+            (, int256 _priceWMatic, , , ) = getPriceFeedWMatic();
+            console.logString('_priceWMatic'); 
+            console.logInt(_priceWMatic);
+            uint256 _toBeBorrowed = (_toBeBorrowedUSD * (10 ** 18)) / uint256(_priceWMatic);
+            console.logString('_toBeBorrowed'); 
+            console.logUint(_toBeBorrowed);
+            console.logString('balance before'); 
+            console.logUint(WMATIC(payable(address(asset))).balanceOf(address(this)));
+            IPool(aave).borrow(address(this.asset()), _toBeBorrowed, 2, 0, address(this));
+            console.logString('balance after'); 
+            console.logUint(WMATIC(payable(address(asset))).balanceOf(address(this)));
+            uint newWMaticBalance = WMATIC(payable(address(asset))).balanceOf(address(this));
+            ERC20(asset).approve(aave, newWMaticBalance);
+            IPool(aave).supply(address(this.asset()), newWMaticBalance, address(this), 0);
+        }
     }
+}
+    
+    function getAaveUserAccountData()
+    public
+    view
+    returns (
+        uint256 totalCollateralBase,
+        uint256 totalDebtBase,
+        uint256 availableBorrowsBase,
+        uint256 currentLiquidationThreshold,
+        uint256 ltv,
+        uint256 healthFactor
+    )
+        {
+            (
+                uint256 _totalCollateralBase,
+                uint256 _totalDebtBase,
+                uint256 _availableBorrowsBase,
+                uint256 _currentLiquidationThreshold,
+                uint256 _ltv,
+                uint256 _healthFactor
+            ) = IPool(aave).getUserAccountData(address(this));
+            return (
+                _totalCollateralBase,
+                _totalDebtBase,
+                _availableBorrowsBase,
+                _currentLiquidationThreshold,
+                _ltv,
+                _healthFactor
+            );
+        }
+
+    function getPriceFeedWMatic()
+    public
+    view
+    returns (uint80 roundID, int256 price, uint256 startedAt, uint256 timeStamp, uint80 answeredInRound)
+        {
+        (
+            uint80 _roundID,
+            int256 _price,
+            uint256 _startedAt,
+            uint256 _timeStamp,
+            uint80 _answeredInRound
+        ) = priceFeedMatic.latestRoundData();
+        return (_roundID, _price, _startedAt, _timeStamp, _answeredInRound);
+        }
 
     function beforeWithdraw(uint256 assets, uint256) internal override {
         // Retrieve underlying tokens from strategy/float.

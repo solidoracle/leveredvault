@@ -21,26 +21,28 @@ contract leveredVaultTest is Test {
     LeveredVault public leveredVault;
     address owner = address(0x01);
     // POLYGON MAINNET CONFIG
-    // WMATIC wmatic = WMATIC(0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270);
-    // address aaveLendingPoolAddress = address(0x794a61358D6845594F94dc1DB02A252b5b4814aD); 
-    // address aaveRewards = address(0x64b761D848206f447Fe2dd461b0c635Ec39EbB27);
-    // bool leverage = true;
-    // uint8 borrowPercentage = 25;
+    WMATIC wmatic = WMATIC(0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270);
+    address aaveLendingPoolAddress = address(0x794a61358D6845594F94dc1DB02A252b5b4814aD); 
+    address aaveRewards = address(0x64b761D848206f447Fe2dd461b0c635Ec39EbB27);
+    bool leverage = false;
+    uint8 borrowPercentage = 25;
+    address maticUsdPriceFeed = address(0xAB594600376Ec9fD91F8e885dADF0CE036862dE0);
 
     // POLYGON MUMBAI CONFIG
-    WMATIC wmatic = WMATIC(0xf237dE5664D3c2D2545684E76fef02A3A58A364c);
-    address aaveLendingPoolAddress = address(0x0b913A76beFF3887d35073b8e5530755D60F78C7); 
-    address aaveRewards = address(0x67D1846E97B6541bA730f0C24899B0Ba3Be0D087);
-    bool leverage = true;
-    uint8 borrowPercentage = 25;
+    // WMATIC wmatic = WMATIC(0xf237dE5664D3c2D2545684E76fef02A3A58A364c);
+    // address aaveLendingPoolAddress = address(0x0b913A76beFF3887d35073b8e5530755D60F78C7); 
+    // address aaveRewards = address(0x67D1846E97B6541bA730f0C24899B0Ba3Be0D087);
+    // bool leverage = true;
+    // uint8 borrowPercentage = 25;
+    // address maticUsdPriceFeed = "0xd0D5e3DB44DE05E9F294BB0a3bEEaF030DE24Ada"; // curioso di sapere se questo è il feed giusto
 
    
-    function setUp() public {
-        leveredVault = new LeveredVault(ERC20(address(wmatic)), owner, aaveLendingPoolAddress, aaveRewards, leverage, borrowPercentage);
+    function setUp() private {
+        leveredVault = new LeveredVault(ERC20(address(wmatic)), owner, aaveLendingPoolAddress, aaveRewards, leverage, borrowPercentage, maticUsdPriceFeed);
     }
 
 
-    function testConstructor() public {
+    function testConstructor() private {
         ERC20 asset = leveredVault.asset();
         assertEq(address(asset), address(wmatic));
         assertEq(leveredVault.owner(), owner);
@@ -49,7 +51,7 @@ contract leveredVaultTest is Test {
     }
 
 
-    function testETHDeposit() public {
+    function testETHDeposit() private {
         (bool success, ) = address(leveredVault).call{value: 1 ether}("");
 
         assertEq(leveredVault.totalHoldings(), 1 ether);      
@@ -62,7 +64,7 @@ contract leveredVaultTest is Test {
         assertEq(aPolWmatic.balanceOf(address(leveredVault)), 1 ether);
     }
 
-    function testETHDepositFuzz(uint amount) public {
+    function testETHDepositFuzz(uint amount) private {
         amount = bound(amount, 0, 100 ether); // for goerli testing you can bound amount to address(this).balance
 
         wmatic.approve(address(leveredVault), amount);
@@ -73,7 +75,7 @@ contract leveredVaultTest is Test {
         assertEq(leveredVault.balanceOf(address(this)), amount); 
     }
 
-    function testwmaticDeposit() public {
+    function testwmaticDeposit() private {
         // wrap ETH
         wmatic.deposit{value: 1 ether}();
         uint256 initialwmaticBalance = wmatic.balanceOf(address(this));
@@ -105,7 +107,7 @@ contract leveredVaultTest is Test {
         assertEq(aPolWmatic.balanceOf(address(leveredVault)), 1 ether);
     }        
 
-    function testWithdraw() public {
+    function testWithdraw() private {
         wmatic.deposit{value: 1 ether}();
         // approve
         wmatic.approve(address(leveredVault), 1 ether);
@@ -124,7 +126,7 @@ contract leveredVaultTest is Test {
 
     }
 
-    function testWithdrawFuzz(uint amount) public {
+    function testWithdrawFuzz(uint amount) private {
         amount = bound(amount, 0.01 ether, 100 ether);
 
         (bool success, ) = address(leveredVault).call{value: amount}("");
@@ -139,9 +141,7 @@ contract leveredVaultTest is Test {
         assertEq(leveredVault.totalHoldings(), 0);
     }
 
-
-    
-    function testMultipleUsers() public {
+    function testMultipleUsers() private {
         address user1 = address(0x0a);
         address user2 = address(0x0b);
         uint amount = 1 ether;
@@ -186,7 +186,7 @@ contract leveredVaultTest is Test {
     }
 
     // only works on mainnet fork as interest needs to be accrued overtime
-    function testHarvest() public {
+    function testHarvest() private {
         uint depositAmount = 1 ether;
 
         (bool success, ) = address(leveredVault).call{value: depositAmount}("");
@@ -229,7 +229,7 @@ contract leveredVaultTest is Test {
     }
 
     // only works on mainnet fork as interest needs to be accrued overtime
-    function testFee() public {
+    function testFee() private {
         uint depositAmount = 1 ether;
 
         (bool success, ) = address(leveredVault).call{value: depositAmount}("");
