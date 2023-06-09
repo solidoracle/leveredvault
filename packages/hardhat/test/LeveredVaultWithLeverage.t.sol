@@ -54,9 +54,6 @@ contract leveredVaultWithLeverageTest is Test {
     function testLeverageDeposit() public {
         (bool success, ) = address(leveredVault).call{value: 1 ether}("");
 
-        console.logString('totalHoldings'); 
-        console.logUint(leveredVault.totalHoldings());
-
         assertEq(leveredVault.totalHoldings(), 1 ether);      
         assertEq(leveredVault.balanceOf(address(this)), 1 ether); 
 
@@ -64,9 +61,6 @@ contract leveredVaultWithLeverageTest is Test {
 
         address aPolWmaticAddress = aaveLendingPool.getReserveData(address(wmatic)).aTokenAddress;
         IERC20 aPolWmatic = IERC20(aPolWmaticAddress);
-
-        console.logString('aPolWmatic.balanceOf'); 
-        console.logUint(aPolWmatic.balanceOf(address(leveredVault)));
 
         (
             uint256 _totalCollateralBase,
@@ -81,6 +75,19 @@ contract leveredVaultWithLeverageTest is Test {
 
         uint borrowedMatic = (_totalDebtBase * (10 ** 18)) / uint256(_priceWMatic); // need amount in matic
         assertEq(aPolWmatic.balanceOf(address(leveredVault)), 1 ether + borrowedMatic);
+    }
+
+    function testLeverageWithdraw() public {
+        (bool success, ) = address(leveredVault).call{value: 1 ether}("");
+
+        vm.warp(block.timestamp + 365 days);
+
+
+        uint shares = leveredVault.balanceOf(address(this));
+        uint assets = leveredVault.convertToAssets(shares);
+        leveredVault.withdraw(assets, address(this), address(this)); 
+ 
+        assertEq(wmatic.balanceOf(address(this)), 1 ether); // no interest received as no harvest has been made?
     }
 
   

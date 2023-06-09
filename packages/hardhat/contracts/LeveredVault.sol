@@ -87,37 +87,24 @@ contract LeveredVault is ERC4626, Owned, ReentrancyGuard {
         // Increase totalHoldings to account for the deposit.
         totalHoldings += assets;
 
-        console.logString('totalHoldings in contract'); 
-        console.logUint(totalHoldings);
-
-        console.logString('assets');
-        console.logUint(assets);
-
         // Leverage 
         if (leverageStakingYieldToggle) {
         (uint256 _supplied, uint256 _borrowed, , , , ) = getAaveUserAccountData();
-        console.logString('_supplied');
-        console.logUint(_supplied); // in chainlink decimals
+
         uint256 _toBeBorrowedUSD = (_supplied * borrowPercentage) / 100;
-        console.logString('_toBeBorrowedUSD one'); 
-        console.logUint(_toBeBorrowedUSD); 
+
 
         if (_toBeBorrowedUSD > _borrowed) {
             _toBeBorrowedUSD -= _borrowed;
             (, int256 _priceWMatic, , , ) = getPriceFeedWMatic();
-            console.logString('_priceWMatic'); 
-            console.logInt(_priceWMatic);
+
             uint256 _toBeBorrowed = (_toBeBorrowedUSD * (10 ** 18)) / uint256(_priceWMatic);
-            console.logString('_toBeBorrowed'); 
-            console.logUint(_toBeBorrowed);
-            console.logString('balance before'); 
-            console.logUint(WMATIC(payable(address(asset))).balanceOf(address(this)));
+
             IPool(aave).borrow(address(this.asset()), _toBeBorrowed, 2, 0, address(this));
-            console.logString('balance after'); 
-            console.logUint(WMATIC(payable(address(asset))).balanceOf(address(this)));
+    
             uint newWMaticBalance = WMATIC(payable(address(asset))).balanceOf(address(this));
             ERC20(asset).approve(aave, newWMaticBalance);
-            IPool(aave).supply(address(this.asset()), newWMaticBalance, address(this), 0);
+            IPool(aave).supply(address(asset), newWMaticBalance, address(this), 0);
         }
     }
 }
@@ -184,6 +171,15 @@ contract LeveredVault is ERC4626, Owned, ReentrancyGuard {
     //////////////////////////////////////////////////////////////*/
 
     function pullFromStrategy(uint256 underlyingAmount) public {
+        if (leverageStakingYieldToggle) {
+            (uint256 _supplied, uint256 _borrowed, , , , ) = getAaveUserAccountData();
+            (, int256 _priceWMatic, , , ) = getPriceFeedWMatic();
+            uint repayMatic = (_borrowed * (10 ** 18)) / uint256(_priceWMatic);
+    
+            IPool(aave).repayWithATokens(address(asset), repayMatic, 2);
+        }
+
+
         IPool(aave).withdraw(address(asset), underlyingAmount, address(this));
 
         unchecked {
