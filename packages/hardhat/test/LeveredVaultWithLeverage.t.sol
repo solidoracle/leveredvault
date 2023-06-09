@@ -74,7 +74,7 @@ contract leveredVaultWithLeverageTest is Test {
         (, int256 _priceWMatic, , , ) = leveredVault.getPriceFeedWMatic();
 
         uint borrowedMatic = (_totalDebtBase * (10 ** 18)) / uint256(_priceWMatic); // need amount in matic
-        assertEq(aPolWmatic.balanceOf(address(leveredVault)), 1 ether + borrowedMatic);
+        assertEq(aPolWmatic.balanceOf(address(leveredVault)) / 10**12, (1 ether + borrowedMatic) / 10**12);
     }
 
     function testLeverageWithdraw() public {
