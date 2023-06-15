@@ -7,6 +7,8 @@ import { Vm } from 'forge-std/Vm.sol';
 import  { IERC20 } from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
 import "../contracts/Interfaces/aave/IPool.sol";
 import "../contracts/Interfaces/IWMATIC.sol";
+import "solmate/src/utils/FixedPointMathLib.sol";
+
 
 import {console} from "../lib/forge-std/src/console.sol";
 
@@ -78,16 +80,76 @@ contract leveredVaultWithLeverageTest is Test {
     }
 
     function testLeverageWithdraw() public {
+        vm.warp(block.timestamp + 100 days);
+
         (bool success, ) = address(leveredVault).call{value: 1 ether}("");
 
-        vm.warp(block.timestamp + 365 days);
+        vm.warp(block.timestamp + 100 days);
 
 
         uint shares = leveredVault.balanceOf(address(this));
         uint assets = leveredVault.convertToAssets(shares);
+        uint vaultBalanceBeforeWithdraw = leveredVault.totalAssets();
+
         leveredVault.withdraw(assets, address(this), address(this)); 
- 
-        assertEq(wmatic.balanceOf(address(this)), 1 ether); // no interest received as no harvest has been made?
+
+        assertEq(wmatic.balanceOf(address(this)), vaultBalanceBeforeWithdraw); // why is it greater than 1 eth we put in? yield is generated regardless? It must be the totalAsset called during withdraw
+    }
+
+    function testLeverageWithdrawFraction() public {
+        vm.warp(block.timestamp + 100 days);
+
+        (bool success, ) = address(leveredVault).call{value: 1 ether}("");
+
+        vm.warp(block.timestamp + 1 days);
+
+        uint shares = leveredVault.balanceOf(address(this)) / 2;
+        uint assets = leveredVault.convertToAssets(shares);
+
+        uint fraction = FixedPointMathLib.mulDivDown(assets, 1e18, leveredVault.totalAssets());
+
+        uint vaultBalanceBeforeWithdraw = FixedPointMathLib.mulDivDown(leveredVault.totalAssets(), fraction, 1e18);
+
+        leveredVault.withdraw(assets, address(this), address(this));
+        assertEq(wmatic.balanceOf(address(this)), vaultBalanceBeforeWithdraw); // change name
+    }
+
+    // want to check the yield earnings of the user
+    function testHarvest() public {
+        vm.warp(block.timestamp + 10 days);
+
+        uint depositAmount = 1 ether;
+
+        (bool success, ) = address(leveredVault).call{value: depositAmount}("");
+
+        IPool aaveLendingPool = IPool(aaveLendingPoolAddress);
+
+        // Advance the blockchain by a certain number of blocks to simulate time passing
+        vm.warp(block.timestamp + 365 days);
+
+        // someone else deposits for the update of the liquidity index, and the update of the interest rate
+        vm.startPrank(address(owner));
+        wmatic.deposit{value: 1 ether}();
+        WMATIC(wmatic).approve(address(aaveLendingPool), 1 ether);
+        aaveLendingPool.supply(address(wmatic), 1 ether, owner, 0);
+
+        uint initialTotalHoldings = leveredVault.totalHoldings();
+
+        leveredVault.harvest();
+
+        vm.stopPrank();
+
+        // Calculate expected yield, which should be more than the initial deposit assuming positive yield rate
+        uint256 expectedYield = leveredVault.totalHoldings() - initialTotalHoldings;
+
+        // Compare with actual yield from the strategy
+        uint256 actualYield = leveredVault.lastEpocProfitAccruedBeforeFees();
+
+        assertEq(expectedYield, actualYield);
+
+        uint shares = leveredVault.balanceOf(address(this));
+        uint assets = leveredVault.convertToAssets(shares);
+        leveredVault.withdraw(assets, address(this), address(this)); 
     }
 
   
