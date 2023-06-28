@@ -14,6 +14,14 @@ interface IPool {
         address onBehalfOf
     ) external;
 
+
+    function repayWithATokens(
+      address asset,
+      uint256 amount,
+      uint256 interestRateMode
+    ) external returns (uint256);
+
+
     function repay(
         address asset,
         uint256 amount,

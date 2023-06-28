@@ -20,6 +20,7 @@ constructor-args :=
 
 build  :; forge build
 test-polygon   :; forge test --fork-url ${POLYGON_FORK_URL}
+test-polygon-log   :; forge test -vv --fork-url ${POLYGON_FORK_URL}
 trace-polygon   :; forge test -vvvv --fork-url ${POLYGON_FORK_URL}
 
 test-mumbai   :; forge test --fork-url ${MUMBAI_FORK_URL}

@@ -13,6 +13,7 @@ import "./Interfaces/aave/IRewardsController.sol";
 import "./Interfaces/IWMATIC.sol";
 import  { IERC20 } from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
 import {console} from "../lib/forge-std/src/console.sol";
+import  { AggregatorV3Interface } from '@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol';
 
 /**
  * @author @solidoracle
@@ -40,17 +41,25 @@ contract LeveredVault is ERC4626, Owned, ReentrancyGuard {
     uint256 public strategyBalance; // used in harvest, but not set in deposit or deducted from withdraw
     ERC20 public immutable UNDERLYING;
     uint256 public feePercent;
+    uint256 public lastEpocProfitAccruedBeforeFees;
 
     bool public leverageStakingYieldToggle;
     uint8 public borrowPercentage;
+    AggregatorV3Interface immutable priceFeedMatic;
 
     // https://docs.aave.com/developers/deployed-contracts/v3-testnet-addresses
     address public immutable aave; 
     address public immutable aaveRewards;
 
-    constructor(ERC20 _UNDERLYING, address _owner, address _aave, address _aaveRewards, 
+    constructor(
+        ERC20 _UNDERLYING, 
+        address _owner, 
+        address _aave, 
+        address _aaveRewards, 
         bool _leverageStakingYieldToggle,
-        uint8 _borrowPercentage)
+        uint8 _borrowPercentage,
+        address _priceFeedMatic
+    )
         ERC4626(_UNDERLYING, "LeveredVault", "LVT")
         Owned(_owner)
     {
@@ -58,6 +67,7 @@ contract LeveredVault is ERC4626, Owned, ReentrancyGuard {
         aaveRewards = _aaveRewards;
         leverageStakingYieldToggle = _leverageStakingYieldToggle;
         borrowPercentage = _borrowPercentage;
+        priceFeedMatic = AggregatorV3Interface(_priceFeedMatic);
         // implicitly inherited from ERC20, which is passed as an argument to the ERC4626 constructor. 
         BASE_UNIT = 10**decimals;
         UNDERLYING = _UNDERLYING;
@@ -77,7 +87,74 @@ contract LeveredVault is ERC4626, Owned, ReentrancyGuard {
         IPool(aave).supply(address(asset), assets, address(this), 0);
         // Increase totalHoldings to account for the deposit.
         totalHoldings += assets;
+
+        // Leverage 
+        if (leverageStakingYieldToggle) {
+        (uint256 _supplied, uint256 _borrowed, , , , ) = getAaveUserAccountData();
+
+        uint256 _toBeBorrowedUSD = (_supplied * borrowPercentage) / 100;
+
+
+        if (_toBeBorrowedUSD > _borrowed) {
+            _toBeBorrowedUSD -= _borrowed;
+            (, int256 _priceWMatic, , , ) = getPriceFeedWMatic();
+
+            uint256 _toBeBorrowed = (_toBeBorrowedUSD * (10 ** 18)) / uint256(_priceWMatic);
+      
+            IPool(aave).borrow(address(this.asset()), _toBeBorrowed, 2, 0, address(this));
+
+            ERC20(asset).approve(aave, _toBeBorrowed);
+            IPool(aave).supply(address(asset), _toBeBorrowed, address(this), 0);
+
+
+            }
+        }
     }
+    
+    function getAaveUserAccountData()
+    public
+    view
+    returns (
+        uint256 totalCollateralBase,
+        uint256 totalDebtBase,
+        uint256 availableBorrowsBase,
+        uint256 currentLiquidationThreshold,
+        uint256 ltv,
+        uint256 healthFactor
+    )
+        {
+            (
+                uint256 _totalCollateralBase,
+                uint256 _totalDebtBase,
+                uint256 _availableBorrowsBase,
+                uint256 _currentLiquidationThreshold,
+                uint256 _ltv,
+                uint256 _healthFactor
+            ) = IPool(aave).getUserAccountData(address(this));
+            return (
+                _totalCollateralBase,
+                _totalDebtBase,
+                _availableBorrowsBase,
+                _currentLiquidationThreshold,
+                _ltv,
+                _healthFactor
+            );
+        }
+
+    function getPriceFeedWMatic()
+    public
+    view
+    returns (uint80 roundID, int256 price, uint256 startedAt, uint256 timeStamp, uint80 answeredInRound)
+        {
+        (
+            uint80 _roundID,
+            int256 _price,
+            uint256 _startedAt,
+            uint256 _timeStamp,
+            uint80 _answeredInRound
+        ) = priceFeedMatic.latestRoundData();
+        return (_roundID, _price, _startedAt, _timeStamp, _answeredInRound);
+        }
 
     function beforeWithdraw(uint256 assets, uint256) internal override {
         // Retrieve underlying tokens from strategy/float.
@@ -96,11 +173,22 @@ contract LeveredVault is ERC4626, Owned, ReentrancyGuard {
     //////////////////////////////////////////////////////////////*/
 
     function pullFromStrategy(uint256 underlyingAmount) public {
+        if (leverageStakingYieldToggle) {
+            (, uint256 _borrowed, , , , ) = getAaveUserAccountData(); 
+            (, int256 _priceWMatic, , , ) = getPriceFeedWMatic();
+            uint borrowedMatic = (_borrowed * (10 ** 18)) / uint256(_priceWMatic); // here we are repaying all the debt, regardless of the underlyingAmount
+    
+            // Calculate the fraction of the total supply that underlyingAmount represents
+            uint256 withdrawFraction = FixedPointMathLib.mulDivDown(underlyingAmount, 1e18, totalHoldings); // The multiplication by 1e18 is to avoid precision loss
+            // Calculate the amount to repay based on the withdraw fraction
+            uint256 repayAmount = FixedPointMathLib.mulDivDown(borrowedMatic, withdrawFraction, 1e18); // The division by 1e18 is to balance out the previous multiplication
+            
+            IPool(aave).repayWithATokens(address(asset), repayAmount, 2);
+        }
+
         IPool(aave).withdraw(address(asset), underlyingAmount, address(this));
 
         unchecked {
-            // Account for the withdrawal done
-            // Cannot underflow as the balances of some strategies cannot exceed the sum of all.
             totalHoldings -= underlyingAmount;
         }
     }
@@ -109,14 +197,23 @@ contract LeveredVault is ERC4626, Owned, ReentrancyGuard {
                         VAULT ACCOUNTING LOGIC
     //////////////////////////////////////////////////////////////*/
 
+    // THIS DETERMINES IF YOU HARVEST WHEN WITHDRAWING
     /// @notice Calculates the total amount of underlying tokens the Vault holds.
     /// @return totalUnderlyingHeld The total amount of underlying tokens the Vault holds.
     function totalAssets() public view override returns (uint256 totalUnderlyingHeld) {
-        unchecked {
-            totalUnderlyingHeld = totalHoldings;
+        if (leverageStakingYieldToggle) {
+            (uint256 _supplied, uint256 _borrowed, , , , ) = getAaveUserAccountData();
+            (, int256 _priceWMatic, , , ) = getPriceFeedWMatic();
+            uint256 totalAssetsUSD = _supplied - _borrowed;
+            return (totalAssetsUSD * (10 ** 18)) / uint256(_priceWMatic);
+        } else {
+
+            (uint256 _supplied, uint256 _borrowed, , , , ) = getAaveUserAccountData();
+            (, int256 _priceWMatic, , , ) = getPriceFeedWMatic();
+            uint256 totalAssetsUSD = _supplied - _borrowed;
+            return (totalAssetsUSD * (10 ** 18)) / uint256(_priceWMatic);
         }
     }
-
     function totalFloat() public view returns (uint256) {
         return UNDERLYING.balanceOf(address(this));
     }
@@ -125,39 +222,24 @@ contract LeveredVault is ERC4626, Owned, ReentrancyGuard {
                              HARVEST LOGIC
     //////////////////////////////////////////////////////////////*/
 
+    // I think we should harvest the equity
+    // as the increase in debt is something that needs to be repayed by the user, and we should not charge fees on that
     function harvest() external onlyOwner {
-        // Get the Vault's current total strategy holdings.
-        uint256 oldTotalHoldings = totalHoldings;
-
         // Used to store the total profit accrued by the aave strategy.
         uint256 totalProfitAccrued;
 
-        // Used to store the new total strategy holdings after harvesting.
-        uint256 newTotalHoldings = oldTotalHoldings;
-    
         // Get the strategy's previous and current balance.
-        uint256 balanceLastHarvest = totalHoldings; // could use strategyBalance?
+        uint256 balanceLastHarvest = totalHoldings;
+        uint balanceThisHarvest = totalAssets();
 
-        IPool aaveLendingPool = IPool(aave);
-
-        DataTypes.ReserveData memory reserveData = aaveLendingPool.getReserveData(address(asset));
-        address aWETHAddress = reserveData.aTokenAddress;
-        uint256 index = reserveData.liquidityIndex;
-
-        IAWETH aWETH = IAWETH(aWETHAddress);
-
-        uint256 scaledBalance = aWETH.scaledBalanceOf(address(this));
-        uint256 intermediateResult = FixedPointMathLib.mulWadDown(scaledBalance, index);
-        uint balanceThisHarvest = FixedPointMathLib.mulDivDown(intermediateResult, 1e18, 1e27);
-
-        // Increase/decrease newTotalHoldings based on the profit/loss registered.
-        newTotalHoldings = newTotalHoldings + balanceThisHarvest - balanceLastHarvest;
-        
         unchecked {
             // Update the total profit accrued while counting losses as zero profit.
             totalProfitAccrued += balanceThisHarvest > balanceLastHarvest
                 ? balanceThisHarvest - balanceLastHarvest // Profits since last harvest.
                 : 0; // If the strategy registered a net loss we don't have any new profit.
+                console.logString("totalProfitAccrued"); // this is the correct yield
+                console.logUint(totalProfitAccrued);
+            
         }
 
         // Compute fees as the fee percent multiplied by the profit.
@@ -166,8 +248,10 @@ contract LeveredVault is ERC4626, Owned, ReentrancyGuard {
         // If we accrued any fees, mint an equivalent amount of rvTokens.
         _mint(address(this), feesAccrued.mulDivDown(BASE_UNIT, convertToAssets(BASE_UNIT)));
     
+        lastEpocProfitAccruedBeforeFees = totalProfitAccrued - feesAccrued;
+
         // Set total holdings to our new total.
-        totalHoldings = newTotalHoldings;
+        totalHoldings += totalProfitAccrued - feesAccrued;
     }
     
 
