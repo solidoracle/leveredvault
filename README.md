@@ -2,11 +2,13 @@
 
 ## Overview
 
-An ERC4626 vault that deposits on aave with leveradge and float.
+An ERC4626 vault that deposits on aave with leveradge.
 
 You can deposit either Matic directly, or wMatic.
 
 Once deposited, you are givin a share of the vault in LVT tokens, that represent your ownership. When you want to withdraw, Leveredvault gives you back your principal amount and any earnings
+
+Key learnings: loans are expensive. At these rates, I'm loosing 2% a year on the loaned money! Luckily we are on testnet :)
 
 ## Deployment
 
